@@ -47,6 +47,36 @@ body {
   box-shadow: 0 0 8px #6ee7b7;
 }
 
+/* === header right side (user + logout) === */
+.header-right{
+  display:flex;
+  align-items:center;
+  gap:10px;
+}
+
+.who{
+  font-size:13px;
+  opacity:.85;
+  padding:6px 8px;
+  border-radius:999px;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.08);
+}
+
+/* ghost button for header */
+.btn-ghost{
+  padding: 8px 12px;
+  border-radius: 12px;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.14);
+  font-weight: 700;
+}
+.btn-ghost:hover{
+  background: rgba(255,255,255,0.10);
+  border-color: rgba(255,255,255,0.24);
+  transform: translateY(-1px);
+}
+
 .presence{
   font-size: 13px;
   padding: 6px 10px;
