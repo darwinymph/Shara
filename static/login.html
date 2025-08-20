@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Village Voice — Login</title>
+  <link rel="stylesheet" href="/static/login.css" />
+</head>
+<body>
+  <!-- Background (non-interactive) -->
+  <div class="bg" aria-hidden="true"></div>
+  <div class="blob blob-a" aria-hidden="true"></div>
+  <div class="blob blob-b" aria-hidden="true"></div>
+  <div class="grid" aria-hidden="true"></div>
+
+  <!-- Centered panel -->
+  <main class="center">
+    <section class="panel" role="dialog" aria-labelledby="title">
+      <header class="panel-head">
+        <svg class="logo" viewBox="0 0 64 64" aria-hidden="true">
+          <path d="M12 52 L28 36 M56 8 22 42l-4 14 14-4L60 12z" />
+        </svg>
+        <div class="brand">
+          <h1>Shara</h1>
+          <p class="tag">Welcome the Baraka</p>
+        </div>
+      </header>
+
+      <h2 id="title" class="title">Log in to continue</h2>
+
+      <form id="login-form" class="form" novalidate>
+        <label class="field">
+          <span>Nickname</span>
+          <input id="nickname" name="nickname" type="text" minlength="2" maxlength="24"
+                 placeholder="e.g. darwinymph" required autofocus />
+        </label>
+
+        <label class="field pw">
+          <span>Password</span>
+          <div class="pw-wrap">
+            <input id="password" name="password" type="password" minlength="4" maxlength="64"
+                   placeholder="••••••••" required />
+            <button type="button" id="togglePw" class="pw-toggle" aria-label="Show password">👁</button>
+          </div>
+          <small class="hint">At least 4 characters</small>
+        </label>
+
+        <label class="check">
+          <input id="remember" type="checkbox" checked />
+          <span>Remember me</span>
+        </label>
+
+        <button id="login-btn" type="submit" class="btn">Log In</button>
+        <p id="error" class="error" aria-live="polite"></p>
+      </form>
+    </section>
+  </main>
+
+  
+  <script>
+    const form = document.getElementById('login-form');
+    const nick = document.getElementById('nickname');
+    const pass = document.getElementById('password');
+    const remember = document.getElementById('remember');
+    const error = document.getElementById('error');
+    const togglePw = document.getElementById('togglePw');
+
+    // Load saved nickname if any
+    const saved = localStorage.getItem('vv_nick') || sessionStorage.getItem('vv_nick');
+    if (saved) nick.value = saved;
+
+    // Allowed users
+    const ALLOWED = [
+      {u: "laura",   p: "laugang8"},
+      {u: "darwind", p: "prag08"}
+    ];
+
+    // Simple hash-based token (client-only)
+    const SALT = "VV_SALT_2025_08";
+    async function makeToken(user, pass){
+      const data = new TextEncoder().encode(SALT + ":" + user + ":" + pass);
+      const buf = await crypto.subtle.digest("SHA-256", data);
+      const arr = Array.from(new Uint8Array(buf));
+      const b64 = btoa(String.fromCharCode.apply(null, arr));
+      return "v1:" + b64;
+    }
+
+    const allowedNick = /^[\w.\-\s]{2,24}$/u;
+
+    async function proceed(name, token){
+      if (remember.checked) {
+        localStorage.setItem('vv_nick', name);
+        localStorage.setItem('vv_auth', token);
+      } else {
+        sessionStorage.setItem('vv_nick', name);
+        sessionStorage.setItem('vv_auth', token);
+      }
+      location.href = "/";
+    }
+
+    form.addEventListener('submit', async (e)=>{
+      e.preventDefault();
+      error.textContent = "";
+      const user = nick.value.trim();
+      const pwd  = pass.value;
+
+      // Validate only the two combos
+      const matched = ALLOWED.find(a => a.u === user && a.p === pwd);
+      if (!matched) {
+        error.textContent = "Invalid username or password.";
+        return;
+      }
+      if (!allowedNick.test(user)){
+        error.textContent = "Nickname contains invalid characters.";
+        return;
+      }
+
+      const token = await makeToken(user, pwd);
+      await proceed(user, token);
+    });
+
+    togglePw.addEventListener('click', ()=>{
+      const isPwd = pass.getAttribute('type') === 'password';
+      pass.setAttribute('type', isPwd ? 'text' : 'password');
+      togglePw.textContent = isPwd ? '🙈' : '👁';
+      pass.focus();
+    });
+  </script>
+</body>
+
+</html>

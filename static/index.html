@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Village Voice</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <!-- App Shell -->
+  <div class="app">
+    <header class="app-header">
+      <div class="title">
+        <span class="dot"></span>
+        Village Voice
+      </div>
+      <div class="presence" id="presence">offline</div>
+    </header>
+
+    <!-- Chat -->
+    <main class="chat">
+      <div id="chatLog" class="chat-log"></div>
+    </main>
+
+    <!-- Composer -->
+    <div class="composer">
+      <input
+        type="text"
+        id="chatInput"
+        class="composer-input"
+        placeholder="Type a message..."
+        autocomplete="off"
+      />
+      <button id="sendBtn" class="btn btn-send" aria-label="Send">
+        <svg viewBox="0 0 24 24" class="icon">
+          <path d="M2 21l21-9L2 3v7l15 2-15 2v7z"></path>
+        </svg>
+      </button>
+    </div>
+  </div>
+
+  <!-- Floating Voice Buttons -->
+  <button id="startCall" class="voice-fab" title="Start Voice Chat">
+    <div class="fab-pulse"></div>
+    <span class="fab-label">Voice</span>
+  </button>
+
+  <!-- Mute toggle -->
+  <button id="muteBtn" class="voice-fab" title="Mute microphone"
+          style="right:22px; bottom:82px; opacity:.7;" disabled>
+    <span class="fab-label" id="muteLabel">Mute</span>
+  </button>
+
+  <div id="callToast" class="toast toast-hidden"></div>
+
+  <script>
+    // ======== Small helpers ========
+    const qs  = (s, r = document) => r.querySelector(s);
+    const qsa = (s, r = document) => Array.from(r.querySelectorAll(s));
+
+    // ======== Identity & Auth — redirect to /login if invalid ========
+
+    const nameStore = localStorage.getItem("vv_nick") || sessionStorage.getItem("vv_nick");
+    const authStore = localStorage.getItem("vv_auth") || sessionStorage.getItem("vv_auth");
+
+    async function makeToken(user, pass){
+      const SALT = "VV_SALT_2025_08";
+      const data = new TextEncoder().encode(SALT + ":" + user + ":" + pass);
+      const buf = await crypto.subtle.digest("SHA-256", data);
+      const arr = Array.from(new Uint8Array(buf));
+      const b64 = btoa(String.fromCharCode.apply(null, arr));
+      return "v1:" + b64;
+    }
+    const ALLOWED = [
+      {u: "laura",   p: "laugang8"},
+      {u: "darwind", p: "prag08"}
+    ];
+    let myName = nameStore;
+
+    (async ()=>{
+      let validAuth = false;
+      if (nameStore && authStore){
+        for (const a of ALLOWED){
+          const expected = await makeToken(a.u, a.p);
+          if (a.u === nameStore && authStore === expected){
+            validAuth = true;
+            break;
+          }
+        }
+      }
+      if (!validAuth) { location.href = "/login"; return; }
+    })();
+    
+
+    const presenceEl = qs("#presence");
+    presenceEl.textContent = `you: ${myName}`;
+
+    // ======== Chat (WS) + history ========
+    const chatSocket = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/ws");
+    const chatLog = qs("#chatLog");
+    const seen = new Set();
+
+    function prettyTime(ts) {
+      const d = new Date(ts);
+      return d.toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"});
+    }
+
+    function appendToChat({text, from, ts}, isYou = false, persist = true) {
+      const wrap = document.createElement("div");
+      wrap.className = "row " + (isYou ? "row-you" : "row-other");
+
+      const bubble = document.createElement("div");
+      bubble.className = "bubble " + (isYou ? "you" : "other");
+      bubble.innerHTML =
+        `<div class="meta">
+           <span class="from">${isYou ? "you" : (from || "guest")}</span>
+           <span class="time">${prettyTime(ts||Date.now())}</span>
+         </div>
+         <div class="text">${escapeHTML(text)}</div>`;
+
+      const key = (from||"") + "|" + String(ts||"") + "|" + text;
+      if (seen.has(key)) return;
+      seen.add(key);
+
+      wrap.appendChild(bubble);
+      chatLog.appendChild(wrap);
+      chatLog.scrollTop = chatLog.scrollHeight;
+
+      // persist handled server-side; nothing to do here.
+    }
+
+    function escapeHTML(s){
+      return s.replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+    }
+
+    // Load history from server
+    window.addEventListener("DOMContentLoaded", async () => {
+      try {
+        const res = await fetch("/history");
+        const hist = await res.json();
+        hist.forEach(r => appendToChat({text:r.text, from:r.from, ts:r.ts}, r.from === myName, false));
+      } catch(e) { /* ignore */ }
+      qs("#chatInput").focus();
+    });
+
+    chatSocket.addEventListener("open", () => {
+      presenceEl.classList.add("online");
+      presenceEl.textContent = `online • ${myName}`;
+    });
+    chatSocket.addEventListener("close", () => {
+      presenceEl.classList.remove("online");
+      presenceEl.textContent = `offline • ${myName}`;
+    });
+
+    chatSocket.onmessage = (event) => {
+      let payload = event.data;
+      try { payload = JSON.parse(payload); } catch(_) {
+        payload = { type:"chat", from:"guest", text: String(event.data), ts: Date.now() };
+      }
+      if (payload.type === "chat") {
+        appendToChat({ text: payload.text, from: payload.from, ts: payload.ts }, false);
+      }
+    };
+
+    function sendMessage() {
+      const input = qs("#chatInput");
+      const msg = input.value.trim();
+      if (!msg) return;
+      if (chatSocket.readyState === WebSocket.OPEN) {
+        const pkt = { type:"chat", from: myName, text: msg, ts: Date.now() };
+        chatSocket.send(JSON.stringify(pkt));
+        appendToChat(pkt, true);
+        input.value = "";
+        input.focus();
+      } else {
+        showToast("Chat connection is closed");
+      }
+    }
+
+    qs("#sendBtn").addEventListener("click", sendMessage);
+    qs("#chatInput").addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault(); sendMessage();
+      }
+    });
+
+    // ======== WebRTC Voice (with Xirsys) ========
+    const iceServers = [
+      { urls: [ "stun:fr-turn1.xirsys.com" ]},
+      {
+        username: "uArvUu56FT1y_6vSoK9INXscb_7DWHeU7IGgGY9Eka1URHcpkZN_sZcwIFvzQjbUAAAAAGik_z1kYXJ3aW5k",
+        credential: "a05128dc-7d4e-11f0-a379-0a56cebd0287",
+        urls: [
+          "turn:fr-turn1.xirsys.com:80?transport=udp",
+          "turn:fr-turn1.xirsys.com:3478?transport=udp",
+          "turn:fr-turn1.xirsys.com:80?transport=tcp",
+          "turn:fr-turn1.xirsys.com:3478?transport=tcp",
+          "turns:fr-turn1.xirsys.com:443?transport=tcp",
+          "turns:fr-turn1.xirsys.com:5349?transport=tcp"
+        ]
+      }
+    ];
+
+    const pc = new RTCPeerConnection({ iceServers });
+    const signaling = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/signal");
+
+    // === Mic stream & hard-mute state ===
+    let localStream = null;
+    let audioSender = null;    // RTCRtpSender for mic
+    let originalTrack = null;  // cached track for unmute
+    let isMuted = false;
+
+    const muteBtn = document.getElementById("muteBtn");
+    const muteLabel = document.getElementById("muteLabel");
+    function updateMuteUI(){
+      muteLabel.textContent = isMuted ? "Unmute" : "Mute";
+      muteBtn.title = isMuted ? "Unmute microphone" : "Mute microphone";
+    }
+    updateMuteUI();
+
+    signaling.onmessage = async (event) => {
+      let data = {};
+      try { data = JSON.parse(event.data); } catch(_) { return; }
+
+      if (data.type === "offer") {
+        await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+
+        // remember stream
+        localStream = stream;
+
+        // add tracks
+        stream.getTracks().forEach(track => pc.addTrack(track, stream));
+
+        // capture sender + original track
+        audioSender = pc.getSenders().find(s => s.track && s.track.kind === "audio");
+        if (audioSender) originalTrack = audioSender.track;
+
+        // apply current mute state (hard + soft)
+        if (isMuted) {
+          if (audioSender) await audioSender.replaceTrack(null); // stop sending
+          stream.getAudioTracks().forEach(t => t.enabled = false); // silence locally
+        }
+
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+        signaling.send(JSON.stringify({ type: "answer", answer, from: myName }));
+        showToast(`Incoming call: ${data.from || "peer"}`);
+
+        // enable mute button
+        muteBtn.disabled = false; muteBtn.style.opacity = 1;
+      } else if (data.type === "answer") {
+        await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
+        showToast(`Connected: ${data.from || "peer"}`);
+      } else if (data.type === "candidate") {
+        if (data.candidate) {
+          try { await pc.addIceCandidate(new RTCIceCandidate(data.candidate)); }
+          catch(e){ console.warn("ICE candidate could not be added:", e); }
+        }
+      }
+    };
+
+    pc.onicecandidate = (event) => {
+      if (event.candidate) {
+        signaling.send(JSON.stringify({ type: "candidate", candidate: event.candidate }));
+      }
+    };
+
+    pc.onconnectionstatechange = () => {
+      const st = pc.connectionState;
+      if (st === "connected") {
+        presenceEl.textContent = `voice connected • ${myName}`;
+        presenceEl.classList.add("voice");
+        showToast("Voice connection established");
+      } else if (st === "disconnected" || st === "failed" || st === "closed") {
+        presenceEl.textContent = `online • ${myName}`;
+        presenceEl.classList.remove("voice");
+        showToast("Voice connection closed");
+      }
+    };
+
+    pc.ontrack = (event) => {
+      let audio = document.getElementById("remoteAudio");
+      if (!audio) {
+        audio = document.createElement("audio");
+        audio.id = "remoteAudio";
+        audio.autoplay = true;
+        document.body.appendChild(audio);
+      }
+      audio.srcObject = event.streams[0];
+    };
+
+    qs("#startCall").onclick = async () => {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      localStream = stream;
+
+      stream.getTracks().forEach(track => pc.addTrack(track, stream));
+
+      // capture sender + original track
+      audioSender = pc.getSenders().find(s => s.track && s.track.kind === "audio");
+      if (audioSender) originalTrack = audioSender.track;
+
+      // honor current mute state
+      if (isMuted) {
+        if (audioSender) await audioSender.replaceTrack(null);
+        stream.getAudioTracks().forEach(t => t.enabled = false);
+      }
+
+      const offer = await pc.createOffer({ offerToReceiveAudio: true });
+      await pc.setLocalDescription(offer);
+      signaling.send(JSON.stringify({ type: "offer", offer, from: myName }));
+      showToast("Call started…");
+
+      muteBtn.disabled = false; muteBtn.style.opacity = 1;
+    };
+
+    // --- Mute toggle (hard + soft mute)
+    muteBtn.addEventListener("click", async () => {
+      if (!localStream) {
+        showToast("Microphone is not active yet");
+        return;
+      }
+      isMuted = !isMuted;
+
+      // Soft mute: silence locally
+      localStream.getAudioTracks().forEach(t => t.enabled = !isMuted);
+
+      // Hard mute: stop/resume sending to remote
+      try {
+        if (audioSender) {
+          if (isMuted) {
+            await audioSender.replaceTrack(null); // stop sending
+          } else {
+            const track = originalTrack || (localStream.getAudioTracks()[0] || null);
+            await audioSender.replaceTrack(track); // resume
+          }
+        }
+      } catch (e) {
+        console.warn("replaceTrack failed:", e);
+      }
+
+      updateMuteUI();
+      showToast(isMuted ? "Muted" : "Unmuted");
+    });
+
+    // ======== Toasts ========
+    const toast = qs("#callToast");
+    let toastTimer = null;
+    function showToast(msg){
+      toast.textContent = msg;
+      toast.classList.remove("toast-hidden");
+      toast.classList.add("toast-show");
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => {
+        toast.classList.remove("toast-show");
+        toast.classList.add("toast-hidden");
+      }, 2600);
+    }
+  </script>
+</body>
+</html>
